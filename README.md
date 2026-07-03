@@ -54,7 +54,7 @@ chmod +x build.sh
 2. **配置启动命令**:
    - Configuration → General Settings → Startup Command:
    ```
-   cd /home/site/wwwroot/backend && PYTHONPATH=/home/site/wwwroot/.python_packages/lib/site-packages python -m gunicorn main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+   bash /home/site/wwwroot/startup.sh
    ```
 
    GitHub Actions 会自动把依赖安装到 `.python_packages/`，并设置 `SCM_DO_BUILD_DURING_DEPLOYMENT=false`，避免 Azure Oryx 在 App Service 上重复构建。

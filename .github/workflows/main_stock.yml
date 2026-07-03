@@ -8,7 +8,7 @@ on:
 
 env:
   AZURE_WEBAPP_NAME: stock
-  STARTUP_COMMAND: cd /home/site/wwwroot/backend && PYTHONPATH=/home/site/wwwroot/.python_packages/lib/site-packages python -m gunicorn main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+  STARTUP_COMMAND: bash /home/site/wwwroot/startup.sh
 
 jobs:
   build:
@@ -149,6 +149,13 @@ jobs:
             --restart false
           az webapp restart \
             --resource-group "$resource_group" \
+            --name "$AZURE_WEBAPP_NAME"
+
+      - name: Show startup logs on failure
+        if: failure()
+        run: |
+          az webapp log startup show \
+            --resource-group "${{ steps.app.outputs.resource_group }}" \
             --name "$AZURE_WEBAPP_NAME"
 
       - name: Verify health endpoint
