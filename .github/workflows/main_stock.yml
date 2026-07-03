@@ -178,18 +178,30 @@ jobs:
             --resource-group "$resource_group" \
             --name "$AZURE_WEBAPP_NAME" \
             --settings "${settings[@]}" >/dev/null
+          sleep 30
 
       - name: Deploy to Azure Web App
         run: |
           resource_group="${{ steps.app.outputs.resource_group }}"
-          az webapp deploy \
-            --resource-group "$resource_group" \
-            --name "$AZURE_WEBAPP_NAME" \
-            --src-path deploy.zip \
-            --type zip \
-            --clean true \
-            --restart false \
-            --track-status false
+          for attempt in 1 2 3; do
+            if az webapp deploy \
+              --resource-group "$resource_group" \
+              --name "$AZURE_WEBAPP_NAME" \
+              --src-path deploy.zip \
+              --type zip \
+              --clean true \
+              --restart false \
+              --track-status false; then
+              break
+            fi
+
+            if [ "$attempt" = "3" ]; then
+              exit 1
+            fi
+
+            echo "Deployment attempt ${attempt} failed; waiting before retry."
+            sleep 30
+          done
           az webapp restart \
             --resource-group "$resource_group" \
             --name "$AZURE_WEBAPP_NAME"
