@@ -10,7 +10,7 @@
 - **交易信号**: 多指标综合评分，生成买入/卖出/观望信号
 - **板块排名**: 行业板块涨跌排名
 
-## 快速启动
+## 快速启动（开发模式）
 
 ### 后端
 
@@ -30,13 +30,49 @@ npm install
 npm run dev
 ```
 
-前端启动在 http://localhost:5173
+前端启动在 http://localhost:5173（自动代理 API 到后端）
+
+## 生产部署（Azure App Service）
+
+### 一键构建
+
+```bash
+chmod +x build.sh
+./build.sh
+```
+
+这会把前端 build 产物放到 `backend/static/`，然后 FastAPI 同时 serve API 和静态文件。
+
+### 部署到 Azure App Service
+
+1. **创建 App Service**:
+   - Azure Portal → App Services → Create
+   - Runtime: Python 3.11, Linux
+   - Region: East Asia（香港）
+   - Plan: B1（$13/月）或更高
+
+2. **配置启动命令**:
+   - Configuration → General Settings → Startup Command:
+   ```
+   gunicorn main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+   ```
+
+3. **连接 GitHub 自动部署**:
+   - Deployment Center → Source: GitHub → 选择此 repo
+   - 或使用已配置的 GitHub Actions（`.github/workflows/deploy.yml`）
+
+4. **GitHub Actions 配置**（如使用 CI/CD）:
+   - Repo Settings → Secrets: 添加 `AZURE_WEBAPP_PUBLISH_PROFILE`
+   - Repo Settings → Variables: 添加 `AZURE_WEBAPP_NAME`（你的 App 名称）
+
+部署完成后访问 `https://<你的app名>.azurewebsites.net`
 
 ## 技术栈
 
 - **后端**: Python + FastAPI + AKShare + Pandas + NumPy
 - **前端**: React + Vite + lightweight-charts + Recharts
-- **数据源**: AKShare（免费，无需注册）
+- **数据源**: AKShare（免费，无需注册，从东方财富等获取数据）
+- **部署**: Azure App Service (Python) + GitHub Actions CI/CD
 
 ## 免责声明
 
