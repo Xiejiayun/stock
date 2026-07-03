@@ -92,27 +92,73 @@ jobs:
 
       - name: Configure App Service runtime and startup command
         run: |
-          az webapp config set \
-            --resource-group "${{ steps.app.outputs.resource_group }}" \
+          resource_group="${{ steps.app.outputs.resource_group }}"
+          changed=false
+
+          current_runtime=$(az webapp config show \
+            --resource-group "$resource_group" \
             --name "$AZURE_WEBAPP_NAME" \
-            --linux-fx-version "PYTHON|3.11" \
-            --startup-file "$STARTUP_COMMAND"
-          az webapp config appsettings set \
-            --resource-group "${{ steps.app.outputs.resource_group }}" \
+            --query linuxFxVersion -o tsv)
+          current_startup=$(az webapp config show \
+            --resource-group "$resource_group" \
             --name "$AZURE_WEBAPP_NAME" \
-            --settings SCM_DO_BUILD_DURING_DEPLOYMENT=false ENABLE_ORYX_BUILD=false
+            --query appCommandLine -o tsv)
+
+          if [ "$current_runtime" != "PYTHON|3.11" ] || [ "$current_startup" != "$STARTUP_COMMAND" ]; then
+            az webapp config set \
+              --resource-group "$resource_group" \
+              --name "$AZURE_WEBAPP_NAME" \
+              --linux-fx-version "PYTHON|3.11" \
+              --startup-file "$STARTUP_COMMAND"
+            changed=true
+          fi
+
+          current_scm_build=$(az webapp config appsettings list \
+            --resource-group "$resource_group" \
+            --name "$AZURE_WEBAPP_NAME" \
+            --query "[?name=='SCM_DO_BUILD_DURING_DEPLOYMENT'].value | [0]" -o tsv)
+          current_oryx_build=$(az webapp config appsettings list \
+            --resource-group "$resource_group" \
+            --name "$AZURE_WEBAPP_NAME" \
+            --query "[?name=='ENABLE_ORYX_BUILD'].value | [0]" -o tsv)
+
+          if [ "$current_scm_build" != "false" ] || [ "$current_oryx_build" != "false" ]; then
+            az webapp config appsettings set \
+              --resource-group "$resource_group" \
+              --name "$AZURE_WEBAPP_NAME" \
+              --settings SCM_DO_BUILD_DURING_DEPLOYMENT=false ENABLE_ORYX_BUILD=false
+            changed=true
+          fi
+
+          if [ "$changed" = true ]; then
+            echo "App Service configuration changed; waiting for SCM to restart."
+            sleep 90
+          else
+            echo "App Service configuration already matches desired deployment settings."
+          fi
 
       - name: Deploy to Azure Web App
-        uses: azure/webapps-deploy@v3
-        id: deploy-to-webapp
-        with:
-          app-name: ${{ env.AZURE_WEBAPP_NAME }}
-          slot-name: Production
-          package: deploy.zip
+        run: |
+          resource_group="${{ steps.app.outputs.resource_group }}"
+          az webapp deploy \
+            --resource-group "$resource_group" \
+            --name "$AZURE_WEBAPP_NAME" \
+            --src-path deploy.zip \
+            --type zip \
+            --clean true \
+            --restart false
+          az webapp restart \
+            --resource-group "$resource_group" \
+            --name "$AZURE_WEBAPP_NAME"
 
       - name: Verify health endpoint
         run: |
-          url="${{ steps.deploy-to-webapp.outputs.webapp-url }}/api/health"
+          resource_group="${{ steps.app.outputs.resource_group }}"
+          host_name=$(az webapp show \
+            --resource-group "$resource_group" \
+            --name "$AZURE_WEBAPP_NAME" \
+            --query defaultHostName -o tsv)
+          url="https://${host_name}/api/health"
           for attempt in {1..12}; do
             if curl --fail --silent --show-error "$url"; then
               exit 0
