@@ -121,12 +121,20 @@ jobs:
             --resource-group "$resource_group" \
             --name "$AZURE_WEBAPP_NAME" \
             --query "[?name=='ENABLE_ORYX_BUILD'].value | [0]" -o tsv)
+          current_websites_port=$(az webapp config appsettings list \
+            --resource-group "$resource_group" \
+            --name "$AZURE_WEBAPP_NAME" \
+            --query "[?name=='WEBSITES_PORT'].value | [0]" -o tsv)
+          current_port=$(az webapp config appsettings list \
+            --resource-group "$resource_group" \
+            --name "$AZURE_WEBAPP_NAME" \
+            --query "[?name=='PORT'].value | [0]" -o tsv)
 
-          if [ "$current_scm_build" != "false" ] || [ "$current_oryx_build" != "false" ]; then
+          if [ "$current_scm_build" != "false" ] || [ "$current_oryx_build" != "false" ] || [ "$current_websites_port" != "8000" ] || [ "$current_port" != "8000" ]; then
             az webapp config appsettings set \
               --resource-group "$resource_group" \
               --name "$AZURE_WEBAPP_NAME" \
-              --settings SCM_DO_BUILD_DURING_DEPLOYMENT=false ENABLE_ORYX_BUILD=false
+              --settings SCM_DO_BUILD_DURING_DEPLOYMENT=false ENABLE_ORYX_BUILD=false WEBSITES_PORT=8000 PORT=8000
             changed=true
           fi
 
@@ -146,16 +154,10 @@ jobs:
             --src-path deploy.zip \
             --type zip \
             --clean true \
-            --restart false
+            --restart false \
+            --track-status false
           az webapp restart \
             --resource-group "$resource_group" \
-            --name "$AZURE_WEBAPP_NAME"
-
-      - name: Show startup logs on failure
-        if: failure()
-        run: |
-          az webapp log startup show \
-            --resource-group "${{ steps.app.outputs.resource_group }}" \
             --name "$AZURE_WEBAPP_NAME"
 
       - name: Verify health endpoint
@@ -166,10 +168,21 @@ jobs:
             --name "$AZURE_WEBAPP_NAME" \
             --query defaultHostName -o tsv)
           url="https://${host_name}/api/health"
-          for attempt in {1..12}; do
+          for attempt in {1..30}; do
             if curl --fail --silent --show-error "$url"; then
               exit 0
             fi
             sleep 10
           done
           curl --fail --silent --show-error "$url"
+
+      - name: Show startup logs on failure
+        if: failure()
+        run: |
+          az webapp log config \
+            --resource-group "${{ steps.app.outputs.resource_group }}" \
+            --name "$AZURE_WEBAPP_NAME" \
+            --docker-container-logging filesystem
+          az webapp log startup show \
+            --resource-group "${{ steps.app.outputs.resource_group }}" \
+            --name "$AZURE_WEBAPP_NAME"
