@@ -22,10 +22,10 @@ jobs:
           npm install
           npm run build
 
-      - name: Copy frontend build to backend
+      - name: Copy frontend build to static
         run: |
-          rm -rf backend/static
-          mv frontend/dist backend/static
+          rm -rf static
+          mv frontend/dist static
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -33,14 +33,11 @@ jobs:
           python-version: '3.11'
 
       - name: Install Python dependencies
-        run: |
-          cd backend
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
       - name: Create deployment package
         run: |
-          cd backend
-          zip -r ../deploy.zip . -x '__pycache__/*' '*.pyc'
+          zip -r deploy.zip main.py data_service.py indicators.py signals.py requirements.txt static/ -x '__pycache__/*' '*.pyc'
 
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
