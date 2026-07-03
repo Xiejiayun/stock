@@ -16,6 +16,7 @@ function StockDetail() {
   const [signal, setSignal] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [partialErrors, setPartialErrors] = useState({})
 
   useEffect(() => {
     loadAllData()
@@ -37,22 +38,17 @@ function StockDetail() {
     try {
       setLoading(true)
       setError(null)
+      setPartialErrors({})
 
-      const [realtimeData, historyData, indicatorData, signalData] = await Promise.allSettled([
-        api.getStockRealtime(symbol),
-        api.getStockHistory(symbol),
-        api.getStockIndicators(symbol),
-        api.getStockSignal(symbol),
-      ])
+      const data = await api.getStockDetail(symbol)
+      setRealtime(data.realtime || null)
+      setHistory(data.history || [])
+      setIndicators(data.indicators || null)
+      setSignal(data.signal || null)
+      setPartialErrors(data.errors || {})
 
-      if (realtimeData.status === 'fulfilled') setRealtime(realtimeData.value)
-      if (historyData.status === 'fulfilled') setHistory(historyData.value)
-      if (indicatorData.status === 'fulfilled') setIndicators(indicatorData.value)
-      if (signalData.status === 'fulfilled') setSignal(signalData.value)
-
-      // If all failed, show error
-      if (historyData.status === 'rejected' && realtimeData.status === 'rejected') {
-        setError(historyData.reason?.message || '无法加载股票数据')
+      if (!data.realtime && !(data.history || []).length) {
+        setError('无法加载股票数据')
       }
     } catch (err) {
       setError(err.message)
@@ -324,7 +320,7 @@ function StockDetail() {
             </div>
           ) : (
             <div style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '20px' }}>
-              正在计算交易信号...
+              {partialErrors.signal || partialErrors.history || '暂无交易信号'}
             </div>
           )}
         </div>

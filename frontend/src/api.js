@@ -1,13 +1,19 @@
 const API_BASE = '/api'
+const DEFAULT_TIMEOUT_MS = 12000
 
 export async function fetchApi(path, options = {}) {
   const url = `${API_BASE}${path}`
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, ...fetchOptions } = options
+  const controller = new AbortController()
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs)
+
   try {
     const response = await fetch(url, {
-      ...options,
+      ...fetchOptions,
+      signal: fetchOptions.signal || controller.signal,
       headers: {
         'Content-Type': 'application/json',
-        ...options.headers,
+        ...fetchOptions.headers,
       },
     })
 
@@ -23,10 +29,15 @@ export async function fetchApi(path, options = {}) {
 
     return data.data
   } catch (error) {
+    if (error.name === 'AbortError') {
+      throw new Error('行情数据源响应超时，请稍后刷新重试')
+    }
     if (error.name === 'TypeError' && error.message.includes('fetch')) {
-      throw new Error('无法连接到后端服务，请确认后端已启动 (localhost:8000)')
+      throw new Error('无法连接到后端服务，请稍后重试')
     }
     throw error
+  } finally {
+    window.clearTimeout(timeoutId)
   }
 }
 
@@ -41,6 +52,7 @@ export const api = {
     fetchApi(`/stock/${symbol}/history?period=${period}`),
   getStockIndicators: (symbol) => fetchApi(`/stock/${symbol}/indicators`),
   getStockSignal: (symbol) => fetchApi(`/stock/${symbol}/signal`),
+  getStockDetail: (symbol) => fetchApi(`/stock/${symbol}/detail`, { timeoutMs: 15000 }),
 
   // Sector
   getSectorList: () => fetchApi('/sector/list'),

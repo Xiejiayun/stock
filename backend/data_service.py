@@ -3,17 +3,45 @@ Data service module using AKShare for Chinese A-share market data.
 Provides: market overview, individual stock history, real-time quotes, sector data.
 """
 
+import concurrent.futures
+import logging
+import os
+import time
+from datetime import datetime, timedelta
+
 import akshare as ak
 import pandas as pd
-from datetime import datetime, timedelta
-from functools import lru_cache
-import time
+from requests import sessions
 
 
 # Simple time-based cache
 _cache = {}
 _cache_ttl = {}
-CACHE_DURATION = 60  # seconds
+CACHE_DURATION = int(os.getenv("CACHE_DURATION_SECONDS", "180"))
+REQUEST_TIMEOUT = int(os.getenv("AKSHARE_REQUEST_TIMEOUT_SECONDS", "5"))
+AKSHARE_TIMEOUT = int(os.getenv("AKSHARE_CALL_TIMEOUT_SECONDS", "5"))
+
+logger = logging.getLogger(__name__)
+_akshare_executor = concurrent.futures.ThreadPoolExecutor(max_workers=6)
+
+
+def _install_default_request_timeout():
+    """AKShare calls external HTTP APIs; do not let those calls hang forever."""
+    original_request = sessions.Session.request
+
+    if getattr(original_request, "_stock_timeout_patched", False):
+        return
+
+    def request_with_timeout(self, method, url, **kwargs):
+        if kwargs.get("timeout") is None:
+            kwargs["timeout"] = REQUEST_TIMEOUT
+        return original_request(self, method, url, **kwargs)
+
+    request_with_timeout._stock_timeout_patched = True
+    sessions.Session.request = request_with_timeout
+
+
+_install_default_request_timeout()
 
 
 def _get_cached(key: str):
@@ -23,10 +51,89 @@ def _get_cached(key: str):
     return None
 
 
+def _get_stale(key: str):
+    """Return stale cache when the upstream source is temporarily unavailable."""
+    return _cache.get(key)
+
+
 def _set_cached(key: str, value):
     """Set value in cache with timestamp."""
     _cache[key] = value
     _cache_ttl[key] = time.time()
+
+
+def _call_akshare(label: str, func, *args, timeout: int = AKSHARE_TIMEOUT, **kwargs):
+    future = _akshare_executor.submit(func, *args, **kwargs)
+    return _resolve_akshare_future(label, future, timeout=timeout)
+
+
+def _resolve_akshare_future(
+    label: str,
+    future: concurrent.futures.Future,
+    cache_key: str | None = None,
+    timeout: int = AKSHARE_TIMEOUT,
+):
+    try:
+        result = future.result(timeout=timeout)
+        if cache_key is not None:
+            _set_cached(cache_key, result)
+        return result
+    except concurrent.futures.TimeoutError as exc:
+        future.cancel()
+        if cache_key is not None:
+            stale = _get_stale(cache_key)
+            if stale is not None:
+                return stale
+        raise TimeoutError(f"{label} 数据源响应超时") from exc
+    except Exception:
+        if cache_key is not None:
+            stale = _get_stale(cache_key)
+            if stale is not None:
+                return stale
+        raise
+
+
+def _to_float(value, default: float = 0.0) -> float:
+    try:
+        if pd.isna(value):
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _get_index_spot_df():
+    cache_key = "index_spot_df"
+    cached = _get_cached(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        df = _call_akshare("指数行情", ak.stock_zh_index_spot_em)
+        _set_cached(cache_key, df)
+        return df
+    except Exception:
+        stale = _get_stale(cache_key)
+        if stale is not None:
+            return stale
+        raise
+
+
+def _get_a_spot_df():
+    cache_key = "a_spot_df"
+    cached = _get_cached(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        df = _call_akshare("A股实时行情", ak.stock_zh_a_spot_em)
+        _set_cached(cache_key, df)
+        return df
+    except Exception:
+        stale = _get_stale(cache_key)
+        if stale is not None:
+            return stale
+        raise
 
 
 def get_market_overview() -> dict:
@@ -35,10 +142,24 @@ def get_market_overview() -> dict:
     Returns dict with indices and rise/fall counts.
     """
     cached = _get_cached("market_overview")
-    if cached:
+    if cached is not None:
         return cached
 
-    result = {"indices": [], "rise_fall": {}, "timestamp": datetime.now().isoformat()}
+    result = {
+        "indices": [],
+        "rise_fall": {},
+        "distribution": None,
+        "timestamp": datetime.now().isoformat(),
+        "source_status": "ok",
+        "message": "",
+    }
+
+    index_cache_key = "index_spot_df"
+    market_cache_key = "a_spot_df"
+    index_df = _get_cached(index_cache_key)
+    market_df = _get_cached(market_cache_key)
+    index_future = None if index_df is not None else _akshare_executor.submit(ak.stock_zh_index_spot_em)
+    market_future = None if market_df is not None else _akshare_executor.submit(ak.stock_zh_a_spot_em)
 
     try:
         # Major indices: SSE Composite, SZSE Component, ChiNext
@@ -50,47 +171,40 @@ def get_market_overview() -> dict:
             "sz399005": "中小板指",
         }
 
+        df = index_df
+        if df is None:
+            df = _resolve_akshare_future("指数行情", index_future, index_cache_key)
+        if df is None or df.empty:
+            raise ValueError("指数行情为空")
+
+        code_series = df["代码"].astype(str).str.replace(r"\D", "", regex=True).str.zfill(6)
         for code, name in index_codes.items():
-            try:
-                df = ak.stock_zh_index_spot_em()
-                row = df[df["代码"] == code.replace("sh", "").replace("sz", "")]
-                if not row.empty:
-                    row = row.iloc[0]
-                    result["indices"].append({
-                        "code": code,
-                        "name": name,
-                        "price": float(row.get("最新价", 0)),
-                        "change": float(row.get("涨跌额", 0)),
-                        "change_pct": float(row.get("涨跌幅", 0)),
-                        "volume": float(row.get("成交量", 0)),
-                        "amount": float(row.get("成交额", 0)),
-                    })
-            except Exception:
+            row = df[code_series == code[-6:]]
+            if row.empty:
                 continue
+            row = row.iloc[0]
+            result["indices"].append({
+                "code": code,
+                "name": name,
+                "price": _to_float(row.get("最新价")),
+                "change": _to_float(row.get("涨跌额")),
+                "change_pct": _to_float(row.get("涨跌幅")),
+                "volume": _to_float(row.get("成交量")),
+                "amount": _to_float(row.get("成交额")),
+            })
 
     except Exception as e:
-        # Fallback: try alternative API
-        try:
-            df = ak.stock_zh_index_spot_em()
-            if df is not None and not df.empty:
-                for _, row in df.head(5).iterrows():
-                    result["indices"].append({
-                        "code": str(row.get("代码", "")),
-                        "name": str(row.get("名称", "")),
-                        "price": float(row.get("最新价", 0)),
-                        "change": float(row.get("涨跌额", 0)),
-                        "change_pct": float(row.get("涨跌幅", 0)),
-                        "volume": float(row.get("成交量", 0)),
-                        "amount": float(row.get("成交额", 0)),
-                    })
-        except Exception:
-            pass
+        logger.warning("Failed to load index data: %s", e)
+        result["source_status"] = "degraded"
+        result["message"] = "指数行情源暂时不可用"
 
     # Rise/Fall statistics
     try:
-        df_market = ak.stock_zh_a_spot_em()
+        df_market = market_df
+        if df_market is None:
+            df_market = _resolve_akshare_future("A股实时行情", market_future, market_cache_key)
         if df_market is not None and not df_market.empty:
-            changes = df_market["涨跌幅"].dropna()
+            changes = pd.to_numeric(df_market["涨跌幅"], errors="coerce").dropna()
             total = len(changes)
             rise = int((changes > 0).sum())
             fall = int((changes < 0).sum())
@@ -118,8 +232,10 @@ def get_market_overview() -> dict:
                 "labels": labels,
                 "values": [int(dist.get(label, 0)) for label in labels],
             }
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Failed to load A-share breadth data: %s", e)
+        result["source_status"] = "degraded"
+        result["message"] = result["message"] or "市场涨跌统计源暂时不可用"
 
     _set_cached("market_overview", result)
     return result
@@ -152,11 +268,13 @@ def get_stock_history(
 
     cache_key = f"history_{symbol}_{period}_{start_date}_{end_date}_{adjust}"
     cached = _get_cached(cache_key)
-    if cached:
+    if cached is not None:
         return cached
 
     try:
-        df = ak.stock_zh_a_hist(
+        df = _call_akshare(
+            f"股票 {symbol} 历史行情",
+            ak.stock_zh_a_hist,
             symbol=symbol,
             period=period,
             start_date=start_date,
@@ -199,6 +317,9 @@ def get_stock_history(
         return records
 
     except Exception as e:
+        stale = _get_stale(cache_key)
+        if stale is not None:
+            return stale
         raise ValueError(f"获取股票 {symbol} 历史数据失败: {str(e)}")
 
 
@@ -206,11 +327,11 @@ def get_stock_realtime(symbol: str) -> dict:
     """Get real-time quote for a stock."""
     cache_key = f"realtime_{symbol}"
     cached = _get_cached(cache_key)
-    if cached:
+    if cached is not None:
         return cached
 
     try:
-        df = ak.stock_zh_a_spot_em()
+        df = _get_a_spot_df()
         if df is None or df.empty:
             raise ValueError("无法获取实时行情数据")
 
@@ -222,20 +343,20 @@ def get_stock_realtime(symbol: str) -> dict:
         result = {
             "code": symbol,
             "name": str(row.get("名称", "")),
-            "price": float(row.get("最新价", 0)),
-            "change": float(row.get("涨跌额", 0)),
-            "change_pct": float(row.get("涨跌幅", 0)),
-            "open": float(row.get("今开", 0)),
-            "high": float(row.get("最高", 0)),
-            "low": float(row.get("最低", 0)),
-            "pre_close": float(row.get("昨收", 0)),
-            "volume": float(row.get("成交量", 0)),
-            "amount": float(row.get("成交额", 0)),
-            "turnover": float(row.get("换手率", 0)),
-            "pe": float(row.get("市盈率-动态", 0)) if pd.notna(row.get("市盈率-动态")) else None,
-            "pb": float(row.get("市净率", 0)) if pd.notna(row.get("市净率")) else None,
-            "market_cap": float(row.get("总市值", 0)),
-            "float_cap": float(row.get("流通市值", 0)),
+            "price": _to_float(row.get("最新价")),
+            "change": _to_float(row.get("涨跌额")),
+            "change_pct": _to_float(row.get("涨跌幅")),
+            "open": _to_float(row.get("今开")),
+            "high": _to_float(row.get("最高")),
+            "low": _to_float(row.get("最低")),
+            "pre_close": _to_float(row.get("昨收")),
+            "volume": _to_float(row.get("成交量")),
+            "amount": _to_float(row.get("成交额")),
+            "turnover": _to_float(row.get("换手率")),
+            "pe": None if pd.isna(row.get("市盈率-动态")) else _to_float(row.get("市盈率-动态")),
+            "pb": None if pd.isna(row.get("市净率")) else _to_float(row.get("市净率")),
+            "market_cap": _to_float(row.get("总市值")),
+            "float_cap": _to_float(row.get("流通市值")),
         }
 
         _set_cached(cache_key, result)
@@ -244,13 +365,16 @@ def get_stock_realtime(symbol: str) -> dict:
     except ValueError:
         raise
     except Exception as e:
+        stale = _get_stale(cache_key)
+        if stale is not None:
+            return stale
         raise ValueError(f"获取股票 {symbol} 实时数据失败: {str(e)}")
 
 
 def search_stock(keyword: str) -> list[dict]:
     """Search stocks by code or name keyword."""
     try:
-        df = ak.stock_zh_a_spot_em()
+        df = _get_a_spot_df()
         if df is None or df.empty:
             return []
 
@@ -265,8 +389,8 @@ def search_stock(keyword: str) -> list[dict]:
             results.append({
                 "code": str(row.get("代码", "")),
                 "name": str(row.get("名称", "")),
-                "price": float(row.get("最新价", 0)),
-                "change_pct": float(row.get("涨跌幅", 0)),
+                "price": _to_float(row.get("最新价")),
+                "change_pct": _to_float(row.get("涨跌幅")),
             })
 
         return results
@@ -279,22 +403,13 @@ def get_sector_list() -> list[dict]:
     """Get sector/industry performance ranking."""
     cache_key = "sector_list"
     cached = _get_cached(cache_key)
-    if cached:
+    if cached is not None:
         return cached
 
     try:
-        df = ak.stock_board_industry_name_em()
+        df = _call_akshare("行业板块排名", ak.stock_board_industry_name_em)
         if df is None or df.empty:
             return []
-
-        # Get sector performance
-        df_perf = ak.stock_board_industry_cons_em(symbol=None)
-    except Exception:
-        pass
-
-    try:
-        # Alternative: use industry index spot data
-        df = ak.stock_board_industry_name_em()
         results = []
 
         # Get detailed info for top sectors
@@ -304,10 +419,10 @@ def get_sector_list() -> list[dict]:
                 results.append({
                     "name": sector_name,
                     "code": str(row.get("板块代码", "")),
-                    "change_pct": float(row.get("涨跌幅", 0)) if pd.notna(row.get("涨跌幅")) else 0,
+                    "change_pct": _to_float(row.get("涨跌幅")),
                     "leader": str(row.get("领涨股票", "")) if pd.notna(row.get("领涨股票")) else "",
-                    "leader_pct": float(row.get("领涨股票-涨跌幅", 0)) if pd.notna(row.get("领涨股票-涨跌幅")) else 0,
-                    "amount": float(row.get("总市值", 0)) if pd.notna(row.get("总市值")) else 0,
+                    "leader_pct": _to_float(row.get("领涨股票-涨跌幅")),
+                    "amount": _to_float(row.get("总市值")),
                 })
             except Exception:
                 continue
@@ -318,6 +433,10 @@ def get_sector_list() -> list[dict]:
         return results
 
     except Exception as e:
+        stale = _get_stale(cache_key)
+        if stale is not None:
+            return stale
+        logger.warning("Failed to load sector data: %s", e)
         raise ValueError(f"获取板块数据失败: {str(e)}")
 
 

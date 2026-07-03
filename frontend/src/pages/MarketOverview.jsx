@@ -32,22 +32,30 @@ function MarketOverview() {
 
   return (
     <div>
+      {data.source_status === 'degraded' && data.message && (
+        <div className="error-msg">{data.message}，请稍后刷新重试。</div>
+      )}
+
       {/* Major Indices */}
       <div className="card">
         <div className="card-title">主要指数</div>
-        <div className="grid-3" style={{ gridTemplateColumns: `repeat(${Math.min(indices.length, 5)}, 1fr)` }}>
-          {indices.map((idx) => (
-            <div key={idx.code} className="index-card">
-              <div className="name">{idx.name}</div>
-              <div className={`price ${idx.change_pct > 0 ? 'text-up' : idx.change_pct < 0 ? 'text-down' : 'text-flat'}`}>
-                {idx.price?.toFixed(2)}
+        {indices.length > 0 ? (
+          <div className="grid-3" style={{ gridTemplateColumns: `repeat(${Math.min(indices.length, 5)}, 1fr)` }}>
+            {indices.map((idx) => (
+              <div key={idx.code} className="index-card">
+                <div className="name">{idx.name}</div>
+                <div className={`price ${idx.change_pct > 0 ? 'text-up' : idx.change_pct < 0 ? 'text-down' : 'text-flat'}`}>
+                  {idx.price?.toFixed(2)}
+                </div>
+                <div className={`change ${idx.change_pct > 0 ? 'text-up' : idx.change_pct < 0 ? 'text-down' : 'text-flat'}`}>
+                  {idx.change_pct > 0 ? '+' : ''}{idx.change_pct?.toFixed(2)}%
+                </div>
               </div>
-              <div className={`change ${idx.change_pct > 0 ? 'text-up' : idx.change_pct < 0 ? 'text-down' : 'text-flat'}`}>
-                {idx.change_pct > 0 ? '+' : ''}{idx.change_pct?.toFixed(2)}%
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-secondary">指数行情暂不可用</div>
+        )}
       </div>
 
       {/* Rise/Fall Statistics */}

@@ -24,7 +24,6 @@ function SectorHeat() {
   }
 
   if (loading) return <div className="loading">正在加载板块数据...</div>
-  if (error) return <div className="error-msg">{error}</div>
 
   // Split into gainers and losers
   const gainers = sectors.filter(s => s.change_pct > 0)
@@ -32,6 +31,8 @@ function SectorHeat() {
 
   return (
     <div>
+      {error && <div className="error-msg">{error}</div>}
+
       <div className="grid-2">
         {/* Top Gainers */}
         <div className="card">

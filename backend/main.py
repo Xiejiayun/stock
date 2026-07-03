@@ -18,7 +18,6 @@ from data_service import (
     get_stock_realtime,
     search_stock,
     get_sector_list,
-    get_stock_detail_data,
 )
 from indicators import calc_all_indicators
 from signals import generate_signals
@@ -37,6 +36,53 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _indicator_payload(history: list[dict]) -> dict:
+    if not history:
+        raise ValueError("历史数据为空，无法计算技术指标")
+
+    df = pd.DataFrame(history)
+    for col in ["open", "high", "low", "close", "volume"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df = calc_all_indicators(df)
+    df_tail = df.tail(120)
+
+    indicator_data = {
+        "dates": df_tail["date"].tolist(),
+        "ma5": df_tail["MA5"].round(2).tolist(),
+        "ma10": df_tail["MA10"].round(2).tolist(),
+        "ma20": df_tail["MA20"].round(2).tolist(),
+        "ma60": df_tail["MA60"].round(2).tolist() if "MA60" in df_tail.columns else [],
+        "dif": df_tail["DIF"].round(4).tolist(),
+        "dea": df_tail["DEA"].round(4).tolist(),
+        "macd": df_tail["MACD"].round(4).tolist(),
+        "rsi": df_tail["RSI"].round(2).tolist(),
+        "k": df_tail["K"].round(2).tolist(),
+        "d": df_tail["D"].round(2).tolist(),
+        "j": df_tail["J"].round(2).tolist(),
+    }
+
+    for key in indicator_data:
+        if key == "dates":
+            continue
+        indicator_data[key] = [None if pd.isna(v) else v for v in indicator_data[key]]
+
+    return indicator_data
+
+
+def _signal_payload(symbol: str, history: list[dict], realtime: dict | None = None) -> dict:
+    if not history:
+        raise ValueError(f"无法获取股票 {symbol} 的历史数据")
+
+    df = pd.DataFrame(history)
+    for col in ["open", "high", "low", "close", "volume"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    signal = generate_signals(df)
+    signal["stock_info"] = realtime
+    return signal
 
 
 @app.get("/api/market/overview")
@@ -94,43 +140,7 @@ def api_stock_indicators(symbol: str):
     """Get technical indicators for a stock."""
     try:
         history = get_stock_history(symbol, period="daily")
-        if not history:
-            raise ValueError(f"无法获取股票 {symbol} 的历史数据")
-
-        df = pd.DataFrame(history)
-        for col in ["open", "high", "low", "close", "volume"]:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-        df = calc_all_indicators(df)
-
-        # Return last 120 days of indicator data
-        df_tail = df.tail(120)
-
-        # Convert to serializable format
-        indicator_data = {
-            "dates": df_tail["date"].tolist(),
-            "ma5": df_tail["MA5"].round(2).tolist(),
-            "ma10": df_tail["MA10"].round(2).tolist(),
-            "ma20": df_tail["MA20"].round(2).tolist(),
-            "ma60": df_tail["MA60"].round(2).tolist() if "MA60" in df_tail.columns else [],
-            "dif": df_tail["DIF"].round(4).tolist(),
-            "dea": df_tail["DEA"].round(4).tolist(),
-            "macd": df_tail["MACD"].round(4).tolist(),
-            "rsi": df_tail["RSI"].round(2).tolist(),
-            "k": df_tail["K"].round(2).tolist(),
-            "d": df_tail["D"].round(2).tolist(),
-            "j": df_tail["J"].round(2).tolist(),
-        }
-
-        # Replace NaN with None for JSON serialization
-        for key in indicator_data:
-            if key == "dates":
-                continue
-            indicator_data[key] = [
-                None if pd.isna(v) else v for v in indicator_data[key]
-            ]
-
-        return {"code": 0, "data": indicator_data}
+        return {"code": 0, "data": _indicator_payload(history)}
 
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -143,28 +153,65 @@ def api_stock_signal(symbol: str):
     """Get trading signal for a stock."""
     try:
         history = get_stock_history(symbol, period="daily")
-        if not history:
-            raise ValueError(f"无法获取股票 {symbol} 的历史数据")
-
-        df = pd.DataFrame(history)
-        for col in ["open", "high", "low", "close", "volume"]:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-        signal = generate_signals(df)
-
-        # Also get realtime info
+        realtime = None
         try:
             realtime = get_stock_realtime(symbol)
-            signal["stock_info"] = realtime
         except Exception:
-            signal["stock_info"] = None
+            pass
 
-        return {"code": 0, "data": signal}
+        return {"code": 0, "data": _signal_payload(symbol, history, realtime)}
 
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"生成交易信号失败: {str(e)}")
+
+
+@app.get("/api/stock/{symbol}/detail")
+def api_stock_detail(symbol: str):
+    """Get realtime quote, history, indicators, and signal with one upstream history load."""
+    realtime = None
+    history = []
+    indicators = None
+    signal = None
+    errors = {}
+
+    try:
+        realtime = get_stock_realtime(symbol)
+    except Exception as e:
+        errors["realtime"] = str(e)
+
+    try:
+        history = get_stock_history(symbol, period="daily")
+    except Exception as e:
+        errors["history"] = str(e)
+
+    if history:
+        try:
+            indicators = _indicator_payload(history)
+        except Exception as e:
+            errors["indicators"] = str(e)
+
+        try:
+            signal = _signal_payload(symbol, history, realtime)
+        except Exception as e:
+            errors["signal"] = str(e)
+
+    if realtime is None and not history:
+        detail = errors.get("history") or errors.get("realtime") or "无法加载股票数据"
+        raise HTTPException(status_code=400, detail=detail)
+
+    return {
+        "code": 0,
+        "data": {
+            "realtime": realtime,
+            "history": history,
+            "indicators": indicators,
+            "signal": signal,
+            "errors": errors,
+            "partial": bool(errors),
+        },
+    }
 
 
 @app.get("/api/sector/list")
