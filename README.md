@@ -9,6 +9,8 @@
 - **技术指标**: MACD、RSI、KDJ 指标图表
 - **交易信号**: 多指标综合评分，生成买入/卖出/观望信号
 - **板块排名**: 行业板块涨跌排名
+- **身份认证**: Google 登录 + 服务端邮箱白名单校验
+- **量化决策**: 策略信号、风险等级、仓位建议和数据质量输出
 
 ## 快速启动（开发模式）
 
@@ -33,6 +35,33 @@ npm run dev
 前端启动在 http://localhost:5173（自动代理 API 到后端）
 
 ## 生产部署（Azure App Service）
+
+### 必需 App Settings
+
+在 Azure App Service → Configuration → Application settings 配置：
+
+```text
+GOOGLE_CLIENT_ID=<Google OAuth 2.0 Web Client ID>
+ALLOWED_EMAILS=user1@example.com,user2@example.com
+SESSION_SECRET=<随机长字符串，至少32字符>
+SESSION_TTL_SECONDS=28800
+```
+
+Google OAuth Web Client 的 Authorized JavaScript origins 需要包含：
+
+```text
+https://<你的app名>.azurewebsites.net
+```
+
+本地开发如需绕过 Google，可临时配置：
+
+```text
+DEV_LOGIN_ENABLED=true
+ALLOWED_EMAILS=test@example.com
+SESSION_SECRET=local-dev-secret
+```
+
+不要在生产环境开启 `DEV_LOGIN_ENABLED`。
 
 ### 一键构建
 
@@ -72,8 +101,14 @@ chmod +x build.sh
 
 - **后端**: Python + FastAPI + AKShare + Pandas + NumPy
 - **前端**: React + Vite + lightweight-charts + Recharts
+- **认证**: Google Identity Services + 后端 ID Token 校验 + 白名单
 - **数据源**: AKShare（免费，无需注册，从东方财富等获取数据）
 - **部署**: Azure App Service (Python) + GitHub Actions CI/CD
+
+## 量化需求文档
+
+- `docs/quant-system-requirements.md`: 真实量化系统需求拆分
+- `docs/data-processing-requirements.md`: 数据接入、标准化、指标和风控处理需求
 
 ## 免责声明
 

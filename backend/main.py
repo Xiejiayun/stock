@@ -5,12 +5,23 @@ Chinese A-share market focus, powered by AKShare.
 
 import os
 from pathlib import Path
+from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 import pandas as pd
+
+from auth_service import (
+    CurrentUser,
+    auth_config,
+    create_dev_session,
+    create_session_token,
+    require_user,
+    verify_google_id_token,
+)
 
 from data_service import (
     get_market_overview,
@@ -21,12 +32,36 @@ from data_service import (
 )
 from indicators import calc_all_indicators
 from signals import generate_signals
+from quant_service import analyze_stock, data_requirements_payload, system_requirements_payload
+
+
+class GoogleLoginRequest(BaseModel):
+    credential: str
+
+
+class DevLoginRequest(BaseModel):
+    email: str
 
 app = FastAPI(
     title="A股交易决策支持系统",
     description="Chinese A-share Trading Decision Support Tool",
     version="1.0.0",
 )
+
+
+def _auth_response(user: CurrentUser) -> dict[str, Any]:
+    return {
+        "code": 0,
+        "data": {
+            "token": create_session_token(user),
+            "user": {
+                "email": user.email,
+                "name": user.name,
+                "picture": user.picture,
+                "provider": user.provider,
+            },
+        },
+    }
 
 # CORS for frontend dev server
 app.add_middleware(
@@ -85,8 +120,41 @@ def _signal_payload(symbol: str, history: list[dict], realtime: dict | None = No
     return signal
 
 
+@app.get("/api/auth/config")
+def api_auth_config():
+    """Return frontend-safe authentication configuration."""
+    return {"code": 0, "data": auth_config()}
+
+
+@app.post("/api/auth/google")
+def api_auth_google(payload: GoogleLoginRequest):
+    """Validate Google ID token and enforce email whitelist."""
+    user = verify_google_id_token(payload.credential)
+    return _auth_response(user)
+
+
+@app.post("/api/auth/dev")
+def api_auth_dev(payload: DevLoginRequest):
+    """Local development login, disabled unless DEV_LOGIN_ENABLED=true."""
+    user = create_dev_session(str(payload.email))
+    return _auth_response(user)
+
+
+@app.get("/api/auth/me")
+def api_auth_me(user: CurrentUser = Depends(require_user)):
+    return {
+        "code": 0,
+        "data": {
+            "email": user.email,
+            "name": user.name,
+            "picture": user.picture,
+            "provider": user.provider,
+        },
+    }
+
+
 @app.get("/api/market/overview")
-def api_market_overview():
+def api_market_overview(user: CurrentUser = Depends(require_user)):
     """Get market overview: indices + rise/fall stats."""
     try:
         data = get_market_overview()
@@ -96,7 +164,10 @@ def api_market_overview():
 
 
 @app.get("/api/stock/search")
-def api_stock_search(keyword: str = Query(..., min_length=1, description="搜索关键词")):
+def api_stock_search(
+    keyword: str = Query(..., min_length=1, description="搜索关键词"),
+    user: CurrentUser = Depends(require_user),
+):
     """Search stocks by code or name."""
     try:
         results = search_stock(keyword)
@@ -108,7 +179,7 @@ def api_stock_search(keyword: str = Query(..., min_length=1, description="搜索
 
 
 @app.get("/api/stock/{symbol}/realtime")
-def api_stock_realtime(symbol: str):
+def api_stock_realtime(symbol: str, user: CurrentUser = Depends(require_user)):
     """Get real-time quote for a stock."""
     try:
         data = get_stock_realtime(symbol)
@@ -124,6 +195,7 @@ def api_stock_history(
     symbol: str,
     period: str = Query("daily", description="周期: daily/weekly/monthly"),
     days: int = Query(365, ge=30, le=3650, description="获取天数"),
+    user: CurrentUser = Depends(require_user),
 ):
     """Get historical K-line data."""
     try:
@@ -136,7 +208,7 @@ def api_stock_history(
 
 
 @app.get("/api/stock/{symbol}/indicators")
-def api_stock_indicators(symbol: str):
+def api_stock_indicators(symbol: str, user: CurrentUser = Depends(require_user)):
     """Get technical indicators for a stock."""
     try:
         history = get_stock_history(symbol, period="daily")
@@ -149,7 +221,7 @@ def api_stock_indicators(symbol: str):
 
 
 @app.get("/api/stock/{symbol}/signal")
-def api_stock_signal(symbol: str):
+def api_stock_signal(symbol: str, user: CurrentUser = Depends(require_user)):
     """Get trading signal for a stock."""
     try:
         history = get_stock_history(symbol, period="daily")
@@ -168,7 +240,7 @@ def api_stock_signal(symbol: str):
 
 
 @app.get("/api/stock/{symbol}/detail")
-def api_stock_detail(symbol: str):
+def api_stock_detail(symbol: str, user: CurrentUser = Depends(require_user)):
     """Get realtime quote, history, indicators, and signal with one upstream history load."""
     realtime = None
     history = []
@@ -215,7 +287,7 @@ def api_stock_detail(symbol: str):
 
 
 @app.get("/api/sector/list")
-def api_sector_list():
+def api_sector_list(user: CurrentUser = Depends(require_user)):
     """Get sector/industry ranking."""
     try:
         data = get_sector_list()
@@ -224,6 +296,39 @@ def api_sector_list():
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取板块数据失败: {str(e)}")
+
+
+@app.get("/api/quant/requirements")
+def api_quant_requirements(user: CurrentUser = Depends(require_user)):
+    return {
+        "code": 0,
+        "data": {
+            "system": system_requirements_payload(),
+            "data": data_requirements_payload(),
+        },
+    }
+
+
+@app.get("/api/quant/{symbol}/analysis")
+def api_quant_analysis(symbol: str, user: CurrentUser = Depends(require_user)):
+    realtime = None
+    errors = {}
+
+    try:
+        realtime = get_stock_realtime(symbol)
+    except Exception as e:
+        errors["realtime"] = str(e)
+
+    try:
+        history = get_stock_history(symbol, period="daily")
+        analysis = analyze_stock(symbol, history, realtime)
+        analysis["errors"] = errors
+        analysis["partial"] = bool(errors)
+        return {"code": 0, "data": analysis}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"量化分析失败: {str(e)}")
 
 
 @app.get("/api/health")

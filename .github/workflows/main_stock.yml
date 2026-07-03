@@ -145,6 +145,40 @@ jobs:
             echo "App Service configuration already matches desired deployment settings."
           fi
 
+      - name: Configure authentication app settings
+        env:
+          GOOGLE_CLIENT_ID_SECRET: ${{ secrets.GOOGLE_CLIENT_ID }}
+          ALLOWED_EMAILS_SECRET: ${{ secrets.ALLOWED_EMAILS }}
+          SESSION_SECRET_SECRET: ${{ secrets.SESSION_SECRET }}
+        run: |
+          resource_group="${{ steps.app.outputs.resource_group }}"
+          settings=(SESSION_TTL_SECONDS=28800 DEV_LOGIN_ENABLED=false)
+
+          if [ -n "$GOOGLE_CLIENT_ID_SECRET" ]; then
+            settings+=(GOOGLE_CLIENT_ID="$GOOGLE_CLIENT_ID_SECRET")
+          fi
+
+          if [ -n "$ALLOWED_EMAILS_SECRET" ]; then
+            settings+=(ALLOWED_EMAILS="$ALLOWED_EMAILS_SECRET")
+          fi
+
+          if [ -n "$SESSION_SECRET_SECRET" ]; then
+            settings+=(SESSION_SECRET="$SESSION_SECRET_SECRET")
+          else
+            current_session_secret=$(az webapp config appsettings list \
+              --resource-group "$resource_group" \
+              --name "$AZURE_WEBAPP_NAME" \
+              --query "[?name=='SESSION_SECRET'].value | [0]" -o tsv)
+            if [ -z "$current_session_secret" ]; then
+              settings+=(SESSION_SECRET="$(openssl rand -hex 32)")
+            fi
+          fi
+
+          az webapp config appsettings set \
+            --resource-group "$resource_group" \
+            --name "$AZURE_WEBAPP_NAME" \
+            --settings "${settings[@]}" >/dev/null
+
       - name: Deploy to Azure Web App
         run: |
           resource_group="${{ steps.app.outputs.resource_group }}"

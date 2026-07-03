@@ -1,5 +1,18 @@
 const API_BASE = '/api'
 const DEFAULT_TIMEOUT_MS = 12000
+const TOKEN_KEY = 'stock_session_token'
+
+export function getAuthToken() {
+  return window.localStorage.getItem(TOKEN_KEY)
+}
+
+export function setAuthToken(token) {
+  if (token) {
+    window.localStorage.setItem(TOKEN_KEY, token)
+  } else {
+    window.localStorage.removeItem(TOKEN_KEY)
+  }
+}
 
 export async function fetchApi(path, options = {}) {
   const url = `${API_BASE}${path}`
@@ -13,6 +26,7 @@ export async function fetchApi(path, options = {}) {
       signal: fetchOptions.signal || controller.signal,
       headers: {
         'Content-Type': 'application/json',
+        ...(getAuthToken() ? { Authorization: `Bearer ${getAuthToken()}` } : {}),
         ...fetchOptions.headers,
       },
     })
@@ -42,6 +56,18 @@ export async function fetchApi(path, options = {}) {
 }
 
 export const api = {
+  // Auth
+  getAuthConfig: () => fetchApi('/auth/config'),
+  loginWithGoogle: (credential) => fetchApi('/auth/google', {
+    method: 'POST',
+    body: JSON.stringify({ credential }),
+  }),
+  loginDev: (email) => fetchApi('/auth/dev', {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  }),
+  getMe: () => fetchApi('/auth/me'),
+
   // Market
   getMarketOverview: () => fetchApi('/market/overview'),
 
@@ -56,6 +82,10 @@ export const api = {
 
   // Sector
   getSectorList: () => fetchApi('/sector/list'),
+
+  // Quant
+  getQuantRequirements: () => fetchApi('/quant/requirements'),
+  getQuantAnalysis: (symbol) => fetchApi(`/quant/${symbol}/analysis`, { timeoutMs: 15000 }),
 }
 
 export default api

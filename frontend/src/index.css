@@ -67,6 +67,24 @@ a:hover {
   gap: 24px;
 }
 
+.user-menu {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.user-menu button,
+.dev-login button {
+  background: var(--bg-card);
+  color: var(--accent-blue);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 7px 12px;
+  cursor: pointer;
+}
+
 .nav-links a {
   color: var(--text-secondary);
   font-size: 0.95rem;
@@ -81,6 +99,63 @@ a:hover {
 
 .page-content {
   padding: 24px 0;
+}
+
+.login-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--bg-primary);
+}
+
+.login-panel {
+  width: 100%;
+  max-width: 420px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 28px;
+}
+
+.login-brand {
+  color: var(--accent-blue);
+  font-weight: 700;
+  font-size: 1.1rem;
+  margin-bottom: 16px;
+}
+
+.login-title {
+  font-size: 1.4rem;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.login-copy {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  margin-bottom: 20px;
+}
+
+.google-login-slot {
+  min-height: 44px;
+  margin: 12px 0;
+}
+
+.dev-login {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.dev-login input {
+  flex: 1;
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  border-radius: 6px;
 }
 
 /* Cards */
@@ -264,6 +339,36 @@ a:hover {
   margin: 12px 0;
 }
 
+.warning-msg {
+  background: rgba(255, 167, 38, 0.1);
+  border: 1px solid rgba(255, 167, 38, 0.3);
+  color: var(--accent-orange);
+  padding: 12px 16px;
+  border-radius: 6px;
+  margin: 12px 0;
+  font-size: 0.9rem;
+}
+
+.metric-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.metric-row strong {
+  color: var(--text-primary);
+}
+
+.signal-label {
+  font-size: 1.8rem;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+
 /* Sector Heat */
 .sector-item {
   display: flex;
@@ -351,5 +456,16 @@ a:hover {
 @media (max-width: 1024px) {
   .container {
     padding: 0 12px;
+  }
+
+  .app-header .container {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .nav-links {
+    flex-wrap: wrap;
+    gap: 12px;
   }
 }
