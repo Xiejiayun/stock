@@ -38,7 +38,23 @@ npm run dev
 
 ### 必需 App Settings
 
-在 Azure App Service → Configuration → Application settings 配置：
+生产环境由 GitHub Actions 把 GitHub Secrets 写入 Azure App Service App Settings。推荐先设置 GitHub Secrets，再触发部署：
+
+```powershell
+.\scripts\configure_auth_secrets.ps1 `
+  -GoogleClientId "<Google OAuth 2.0 Web Client ID>" `
+  -AllowedEmails "user1@example.com,user2@example.com"
+```
+
+脚本会配置：
+
+```text
+GOOGLE_CLIENT_ID=<Google OAuth 2.0 Web Client ID>
+ALLOWED_EMAILS=user1@example.com,user2@example.com
+SESSION_SECRET=<自动生成的随机32字节密钥>
+```
+
+也可以在 Azure App Service → Configuration → Application settings 手动配置：
 
 ```text
 GOOGLE_CLIENT_ID=<Google OAuth 2.0 Web Client ID>
@@ -50,7 +66,13 @@ SESSION_TTL_SECONDS=28800
 Google OAuth Web Client 的 Authorized JavaScript origins 需要包含：
 
 ```text
-https://<你的app名>.azurewebsites.net
+https://stock-dchhdsdrg0fvbmdm.eastasia-01.azurewebsites.net
+```
+
+生产验证接口：
+
+```powershell
+python .\scripts\verify_deployed_app.py https://stock-dchhdsdrg0fvbmdm.eastasia-01.azurewebsites.net --require-auth-settings
 ```
 
 本地开发如需绕过 Google，可临时配置：
