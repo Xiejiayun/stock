@@ -8,7 +8,7 @@ on:
 
 env:
   AZURE_WEBAPP_NAME: stock
-  STARTUP_COMMAND: cd /home/site/wwwroot/backend && gunicorn main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+  STARTUP_COMMAND: cd /home/site/wwwroot/backend && PYTHONPATH=/home/site/wwwroot/.python_packages/lib/site-packages python -m gunicorn main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
 
 jobs:
   build:
@@ -43,11 +43,16 @@ jobs:
           python-version: '3.11'
           cache: pip
 
-      - name: Validate Python dependencies
-        run: python -m pip install -r requirements.txt
+      - name: Install Python dependencies into deployment package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --target=".python_packages/lib/site-packages" -r requirements.txt
+
+      - name: Validate FastAPI app import
+        run: PYTHONPATH=".python_packages/lib/site-packages:backend" python -c "import main; print('ok')"
 
       - name: Create deployment package
-        run: zip -r deploy.zip backend/ requirements.txt startup.sh -x '__pycache__/*' '*.pyc'
+        run: zip -r deploy.zip backend/ .python_packages/ requirements.txt startup.sh -x '__pycache__/*' '*.pyc'
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
@@ -92,6 +97,10 @@ jobs:
             --name "$AZURE_WEBAPP_NAME" \
             --linux-fx-version "PYTHON|3.11" \
             --startup-file "$STARTUP_COMMAND"
+          az webapp config appsettings set \
+            --resource-group "${{ steps.app.outputs.resource_group }}" \
+            --name "$AZURE_WEBAPP_NAME" \
+            --settings SCM_DO_BUILD_DURING_DEPLOYMENT=false ENABLE_ORYX_BUILD=false
 
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3

@@ -54,16 +54,17 @@ chmod +x build.sh
 2. **配置启动命令**:
    - Configuration → General Settings → Startup Command:
    ```
-   cd /home/site/wwwroot/backend && gunicorn main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+   cd /home/site/wwwroot/backend && PYTHONPATH=/home/site/wwwroot/.python_packages/lib/site-packages python -m gunicorn main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
    ```
+
+   GitHub Actions 会自动把依赖安装到 `.python_packages/`，并设置 `SCM_DO_BUILD_DURING_DEPLOYMENT=false`，避免 Azure Oryx 在 App Service 上重复构建。
 
 3. **连接 GitHub 自动部署**:
    - Deployment Center → Source: GitHub → 选择此 repo
-   - 或使用已配置的 GitHub Actions（`.github/workflows/deploy.yml`）
+   - 或使用已配置的 GitHub Actions（`.github/workflows/main_stock.yml`）
 
 4. **GitHub Actions 配置**（如使用 CI/CD）:
-   - Repo Settings → Secrets: 添加 `AZURE_WEBAPP_PUBLISH_PROFILE`
-   - Repo Settings → Variables: 添加 `AZURE_WEBAPP_NAME`（你的 App 名称）
+   - Repo Settings → Secrets: 添加 Azure OIDC 登录所需的 `AZUREAPPSERVICE_CLIENTID_*`、`AZUREAPPSERVICE_TENANTID_*`、`AZUREAPPSERVICE_SUBSCRIPTIONID_*`
 
 部署完成后访问 `https://<你的app名>.azurewebsites.net`
 
