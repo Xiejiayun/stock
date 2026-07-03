@@ -54,7 +54,7 @@ chmod +x build.sh
 2. **配置启动命令**:
    - Configuration → General Settings → Startup Command:
    ```
-   gunicorn main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+   cd /home/site/wwwroot/backend && gunicorn main:app --workers 2 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
    ```
 
 3. **连接 GitHub 自动部署**:
