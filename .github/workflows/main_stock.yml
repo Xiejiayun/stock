@@ -85,7 +85,8 @@ jobs:
       - name: Resolve App Service resource group
         id: app
         run: |
-          resource_group=$(az webapp list --query "[?name=='${AZURE_WEBAPP_NAME}'].resourceGroup | [0]" -o tsv)
+          source scripts/ci/azure_retry.sh
+          resource_group=$(az_retry webapp list --query "[?name=='${AZURE_WEBAPP_NAME}'].resourceGroup | [0]" -o tsv)
           if [ -z "$resource_group" ]; then
             echo "Unable to find App Service '${AZURE_WEBAPP_NAME}' in the logged-in subscription." >&2
             exit 1
@@ -94,20 +95,21 @@ jobs:
 
       - name: Configure App Service runtime and startup command
         run: |
+          source scripts/ci/azure_retry.sh
           resource_group="${{ steps.app.outputs.resource_group }}"
           changed=false
 
-          current_runtime=$(az webapp config show \
+          current_runtime=$(az_retry webapp config show \
             --resource-group "$resource_group" \
             --name "$AZURE_WEBAPP_NAME" \
             --query linuxFxVersion -o tsv)
-          current_startup=$(az webapp config show \
+          current_startup=$(az_retry webapp config show \
             --resource-group "$resource_group" \
             --name "$AZURE_WEBAPP_NAME" \
             --query appCommandLine -o tsv)
 
           if [ "$current_runtime" != "PYTHON|3.11" ] || [ "$current_startup" != "$STARTUP_COMMAND" ]; then
-            az webapp config set \
+            az_retry webapp config set \
               --resource-group "$resource_group" \
               --name "$AZURE_WEBAPP_NAME" \
               --linux-fx-version "PYTHON|3.11" \
@@ -115,25 +117,25 @@ jobs:
             changed=true
           fi
 
-          current_scm_build=$(az webapp config appsettings list \
+          current_scm_build=$(az_retry webapp config appsettings list \
             --resource-group "$resource_group" \
             --name "$AZURE_WEBAPP_NAME" \
             --query "[?name=='SCM_DO_BUILD_DURING_DEPLOYMENT'].value | [0]" -o tsv)
-          current_oryx_build=$(az webapp config appsettings list \
+          current_oryx_build=$(az_retry webapp config appsettings list \
             --resource-group "$resource_group" \
             --name "$AZURE_WEBAPP_NAME" \
             --query "[?name=='ENABLE_ORYX_BUILD'].value | [0]" -o tsv)
-          current_websites_port=$(az webapp config appsettings list \
+          current_websites_port=$(az_retry webapp config appsettings list \
             --resource-group "$resource_group" \
             --name "$AZURE_WEBAPP_NAME" \
             --query "[?name=='WEBSITES_PORT'].value | [0]" -o tsv)
-          current_port=$(az webapp config appsettings list \
+          current_port=$(az_retry webapp config appsettings list \
             --resource-group "$resource_group" \
             --name "$AZURE_WEBAPP_NAME" \
             --query "[?name=='PORT'].value | [0]" -o tsv)
 
           if [ "$current_scm_build" != "false" ] || [ "$current_oryx_build" != "false" ] || [ "$current_websites_port" != "8000" ] || [ "$current_port" != "8000" ]; then
-            az webapp config appsettings set \
+            az_retry webapp config appsettings set \
               --resource-group "$resource_group" \
               --name "$AZURE_WEBAPP_NAME" \
               --settings SCM_DO_BUILD_DURING_DEPLOYMENT=false ENABLE_ORYX_BUILD=false WEBSITES_PORT=8000 PORT=8000
@@ -153,6 +155,7 @@ jobs:
           ALLOWED_EMAILS_SECRET: ${{ secrets.ALLOWED_EMAILS }}
           SESSION_SECRET_SECRET: ${{ secrets.SESSION_SECRET }}
         run: |
+          source scripts/ci/azure_retry.sh
           resource_group="${{ steps.app.outputs.resource_group }}"
           settings=(SESSION_TTL_SECONDS=28800 DEV_LOGIN_ENABLED=false)
 
@@ -167,7 +170,7 @@ jobs:
           if [ -n "$SESSION_SECRET_SECRET" ]; then
             settings+=(SESSION_SECRET="$SESSION_SECRET_SECRET")
           else
-            current_session_secret=$(az webapp config appsettings list \
+            current_session_secret=$(az_retry webapp config appsettings list \
               --resource-group "$resource_group" \
               --name "$AZURE_WEBAPP_NAME" \
               --query "[?name=='SESSION_SECRET'].value | [0]" -o tsv)
@@ -176,7 +179,7 @@ jobs:
             fi
           fi
 
-          az webapp config appsettings set \
+          az_retry webapp config appsettings set \
             --resource-group "$resource_group" \
             --name "$AZURE_WEBAPP_NAME" \
             --settings "${settings[@]}" >/dev/null
@@ -184,27 +187,17 @@ jobs:
 
       - name: Deploy to Azure Web App
         run: |
+          source scripts/ci/azure_retry.sh
           resource_group="${{ steps.app.outputs.resource_group }}"
-          for attempt in 1 2 3; do
-            if az webapp deploy \
-              --resource-group "$resource_group" \
-              --name "$AZURE_WEBAPP_NAME" \
-              --src-path deploy.zip \
-              --type zip \
-              --clean true \
-              --restart false \
-              --track-status false; then
-              break
-            fi
-
-            if [ "$attempt" = "3" ]; then
-              exit 1
-            fi
-
-            echo "Deployment attempt ${attempt} failed; waiting before retry."
-            sleep 30
-          done
-          az webapp restart \
+          az_retry webapp deploy \
+            --resource-group "$resource_group" \
+            --name "$AZURE_WEBAPP_NAME" \
+            --src-path deploy.zip \
+            --type zip \
+            --clean true \
+            --restart false \
+            --track-status false
+          az_retry webapp restart \
             --resource-group "$resource_group" \
             --name "$AZURE_WEBAPP_NAME"
 
@@ -213,8 +206,9 @@ jobs:
           GOOGLE_CLIENT_ID_SECRET: ${{ secrets.GOOGLE_CLIENT_ID }}
           ALLOWED_EMAILS_SECRET: ${{ secrets.ALLOWED_EMAILS }}
         run: |
+          source scripts/ci/azure_retry.sh
           resource_group="${{ steps.app.outputs.resource_group }}"
-          host_name=$(az webapp show \
+          host_name=$(az_retry webapp show \
             --resource-group "$resource_group" \
             --name "$AZURE_WEBAPP_NAME" \
             --query defaultHostName -o tsv)
@@ -227,10 +221,11 @@ jobs:
       - name: Show startup logs on failure
         if: failure()
         run: |
-          az webapp log config \
+          source scripts/ci/azure_retry.sh
+          az_retry webapp log config \
             --resource-group "${{ steps.app.outputs.resource_group }}" \
             --name "$AZURE_WEBAPP_NAME" \
             --docker-container-logging filesystem
-          az webapp log startup show \
+          az_retry webapp log startup show \
             --resource-group "${{ steps.app.outputs.resource_group }}" \
             --name "$AZURE_WEBAPP_NAME"
