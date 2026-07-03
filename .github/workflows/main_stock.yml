@@ -68,6 +68,8 @@ jobs:
       contents: read
 
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download artifact from build job
         uses: actions/download-artifact@v4
         with:
@@ -206,21 +208,21 @@ jobs:
             --resource-group "$resource_group" \
             --name "$AZURE_WEBAPP_NAME"
 
-      - name: Verify health endpoint
+      - name: Verify deployed app contract
+        env:
+          GOOGLE_CLIENT_ID_SECRET: ${{ secrets.GOOGLE_CLIENT_ID }}
+          ALLOWED_EMAILS_SECRET: ${{ secrets.ALLOWED_EMAILS }}
         run: |
           resource_group="${{ steps.app.outputs.resource_group }}"
           host_name=$(az webapp show \
             --resource-group "$resource_group" \
             --name "$AZURE_WEBAPP_NAME" \
             --query defaultHostName -o tsv)
-          url="https://${host_name}/api/health"
-          for attempt in {1..30}; do
-            if curl --fail --silent --show-error "$url"; then
-              exit 0
-            fi
-            sleep 10
-          done
-          curl --fail --silent --show-error "$url"
+          verify_args=("https://${host_name}" --attempts 30 --delay-seconds 10)
+          if [ -n "$GOOGLE_CLIENT_ID_SECRET" ] && [ -n "$ALLOWED_EMAILS_SECRET" ]; then
+            verify_args+=(--require-auth-settings)
+          fi
+          python scripts/verify_deployed_app.py "${verify_args[@]}"
 
       - name: Show startup logs on failure
         if: failure()
